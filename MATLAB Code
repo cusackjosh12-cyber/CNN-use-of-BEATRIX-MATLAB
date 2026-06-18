@@ -1,0 +1,117 @@
+clear; clc %clears ports and communication to arduino
+
+folderPath = fullfile('/MATLAB Drive', 'Emotion CNN Model', 'datasets', 'CK+48');
+
+
+
+imds = imageDatastore(folderPath, ...
+    'IncludeSubfolders', true, ...
+    'LabelSource', 'foldernames'); %sets up which folders should be analysed by CNN
+
+ [imdstrain, imdsvalid]=splitEachLabel(imds,.8,'randomize');
+  
+     
+CountLabel = imds.countEachLabel
+aa=read(imds);
+size(aa)
+layers = [
+    imageInputLayer([48 48 1]); %makes any image the correct reading size
+    
+    %applying all filters for CNN to scan over
+    
+    convolution2dLayer(3,8,'Padding','same')
+    batchNormalizationLayer
+    reluLayer
+    
+    maxPooling2dLayer(2,'Stride',2)
+    
+    convolution2dLayer(3,16,'Padding','same')
+    batchNormalizationLayer
+    reluLayer
+    
+    maxPooling2dLayer(2,'Stride',2)
+    
+    convolution2dLayer(3,32,'Padding','same')
+    batchNormalizationLayer
+    reluLayer
+    
+    fullyConnectedLayer(8)
+    softmaxLayer
+    classificationLayer];  
+
+%sets up training options - adjustable to make CNN more accurate
+
+options = trainingOptions('sgdm', ...
+    'InitialLearnRate',0.01, ...
+    'MaxEpochs',20, ...
+    'Shuffle','every-epoch', ...
+    'ValidationFrequency',10, ...
+    'Verbose',false, ...
+    'Plots','training-progress');
+convnet = trainNetwork(imdstrain,layers,options);
+
+
+% finds and plots the accuracy of the deep CNN training in real time
+YPred = classify(convnet,imdsvalid);
+YValidation = imdsvalid.Labels;
+
+accuracy = sum(YPred == YValidation)/numel(YValidation)
+
+plotconfusion(YValidation,YPred)
+
+%shows the validity image
+a=read(imdsvalid  );
+class=classify(convnet,a)
+imshow(a)
+title(string(class))
+
+%sets up MTCNN detector
+detector = mtcnn.Detector();
+
+%clears camera
+clear camera
+figure
+camera = webcam(1) % select your webcam
+
+camera.Resolution = '640x480'; %lowers resolution for higher framerate
+while true %infinite loop for the camera
+    img = camera.snapshot; %takes a snapshot of what the camera sees
+    picture = rgb2gray(img); %adds filter for CNN emotion scanning
+
+    [bboxes, scores, landmarks] = detector.detect(img); %detects the faces using MTCNN
+
+    if ~isempty(bboxes) %if there are detected faces
+        labels = strings(size(bboxes, 1), 1); %sets up the string for emotion
+
+        for i = 1:size(bboxes, 1) %for every face detected
+            bbox = bboxes(i, :);
+
+            % Ensure bbox is within image bounds
+            bbox(1) = max(1, bbox(1));
+            bbox(2) = max(1, bbox(2));
+            bbox(3) = min(bbox(3), size(picture, 2) - bbox(1));
+            bbox(4) = min(bbox(4), size(picture, 1) - bbox(2));
+
+            % Crop, resize, and classify each face individually
+            face = imcrop(picture, bbox);
+            face = imresize(face, [48 48]);
+            labels(i) = string(classify(convnet, face));
+
+            if labels(i) == 'contempt' %if the emotion is contempt
+                mid = bboxes(i,1)+(bboxes(i,3)/2) %find middle of face
+            else
+                mid = 320 %camera midpoint
+            end
+             
+            
+        % Annotate all faces with their own emotion label
+        img = insertObjectAnnotation(img, 'rectangle', bboxes, labels, 'FontSize', 24); %add boxes over faces with labels of emotions of font size 24
+    
+        end
+    end
+
+    image(img); 
+    title('Live Emotion Detection'); %title image
+    drawnow; %show image on figure
+
+end
